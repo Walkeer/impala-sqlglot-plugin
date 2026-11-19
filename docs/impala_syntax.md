@@ -13,11 +13,13 @@ and regenerates Impala SQL:
 | TABLESAMPLE | `exp.TableSample` with `method=SYSTEM`, `percent` and optional `seed`, generated with `REPEATABLE` |
 | Non-unique primary keys | `NonUniquePrimaryKey` or `NonUniquePrimaryKeyColumnConstraint`, with `unique=False` |
 | Table-key modifiers | `ImpalaPrimaryKey` / `ImpalaForeignKey`, with optional `enabled`, `validated` and `rely` boolean fields; non-unique table keys retain the same fields |
-| Catalog SHOW | `impala_sqlglot.show.ImpalaShow`, with `kind`, optional table target `this`, database identifier `db` and string literal `pattern` |
+| Catalog SHOW | `impala_sqlglot.show.ImpalaShow`, with `kind`, optional target `this`, database identifier `db`, pattern, partition predicate, time travel and family-specific options |
 | Statistics | `ImpalaComputeStats` / `ImpalaDropStats`, with a table target and applicable incremental, partition, column-list and sampling options |
 | Metadata | `ImpalaRefresh` / `ImpalaInvalidateMetadata`; refresh distinguishes tables, functions and authorization |
 | Kudu partitioning | `KuduPartitioningProperty`, ordered hash/range components, hash columns/counts, range endpoints and inclusivity |
 | ADD / DROP RANGE PARTITION | `KuduAlterRangePartition` actions inside `exp.Alter` |
+| Partition maintenance | `ImpalaRecoverPartitions` / `ImpalaDropPartition` actions inside `exp.Alter`; DROP retains predicate selection, IF EXISTS and PURGE |
+| Cache maintenance | `ImpalaSetCached` / `ImpalaSetUncached` actions inside `exp.Alter`, with optional partition selection; CACHED retains its pool and replication literal |
 | LIKE PARQUET | `ParquetSchemaReference` holding a string reference, not a resolved schema |
 | Function signatures | `VariadicParameter` around the final type; scalar CREATE and DROP signatures are checked separately |
 | DROP FUNCTION | `DropFunction`; `wrapped` distinguishes omitted signatures from `()` |
@@ -55,12 +57,25 @@ assert tree.sql(dialect="impala").startswith("UPSERT /*+ SHUFFLE */ INTO")
   Modifiers are not accepted for CREATE TABLE AS SELECT. NON UNIQUE and
   NOT ENFORCED are alternative spellings, not combinable declarations.
   Key column lists require identifiers; foreign keys require complete
-  referenced table and column lists.
-- Structured SHOW covers TABLES (optional IN database and pattern),
-  DATABASES/SCHEMAS (optional pattern) and CREATE TABLE (table target).
-  Bare string patterns generate with LIKE; SCHEMAS generates as DATABASES.
-  Other SHOW families, including CREATE TABLE WITH STATS, remain opaque
+  referenced table and column lists. These table-key flags are not column
+  nullability modifiers: `NOT NULL DISABLE NOVALIDATE RELY` and
+  `NOT NULL ENABLE NOVALIDATE RELY` are not native column definitions.
+  Explicit column NULL and NOT NULL declarations remain in generated SQL.
+- Structured SHOW covers TABLES, DATABASES/SCHEMAS, TABLE/COLUMN STATS,
+  PARTITIONS (optional WHERE), RANGE PARTITIONS, HASH SCHEMA, FUNCTIONS
+  (optional AGGREGATE/ANALYTIC), CREATE TABLE/VIEW (optional WITH STATS),
+  and FILES IN a table (optional time travel followed by PARTITION).
+  TABLES and FUNCTIONS accept IN a database; catalog listings accept string
+  patterns. Bare patterns generate with LIKE; SCHEMAS generates as DATABASES.
+  SCALAR FUNCTIONS is not native syntax. Other SHOW families remain opaque
   Commands. Parsing does not query a catalog or fabricate returned objects.
+- ALTER TABLE RECOVER PARTITIONS, DROP [IF EXISTS] PARTITION with optional
+  PURGE, and SET CACHED/UNCACHED retain separate action types.
+  Cache actions can select partitions; DROP selection can contain predicates,
+  not only static assignments. DROP remains a destructive action, distinct
+  from catalog inspection and recovery. Parsing never executes any action.
+  Replication accepts an unsigned decimal integer literal; usable replication
+  values, cache pools and partition selections require engine analysis.
 - Statistics/metadata paths require the documented targets and reject
   unsupported option combinations. Targetless `INVALIDATE METADATA` is valid.
   `COMPUTE STATS ... ()` preserves an explicitly empty column list.
@@ -117,6 +132,18 @@ and lowering logic separately. The plugin does not replace those adapters
 or treat a statistics operation as a row-data write. Ordinary COMPUTE STATS
 with PARTITION is not added by this integration contract.
 
+`ImpalaShow` describes metadata inspection, not a SELECT result or a row-data
+write. Its `this` target is absent for catalog listings and an `exp.Table`
+for table-specific families. A consumer should classify its `kind` explicitly
+and retain optional `partition`, `where`, `version`, `function_kind` and
+`with_stats` fields rather than silently dropping them.
+
+The plugin accepts SQL statements, not arbitrary source-file wrappers,
+unbound template parameters or client scripts. Consumers must frame strings
+with the selected dialect's escape rules and supply a documented source and
+binding contract. Dropping angle-bracket markers or guessing parameter
+values is not a parser repair.
+
 ## Reference and compatibility limits
 
 Syntax expectations are based on Apache's public SQL reference and native
@@ -144,7 +171,9 @@ With the package and pytest installed in the chosen environment:
 ```bash
 python -m pytest tests/test_impala_gaps.py tests/test_metadata.py \
   tests/test_kudu_ddl.py tests/test_generation_controls.py \
-  tests/test_roundtrip_helper.py tests/test_fixture_controls.py
+  tests/test_roundtrip_helper.py tests/test_fixture_controls.py \
+  tests/test_show.py tests/test_maintenance.py tests/test_native_column_controls.py \
+  tests/test_metadata_keyword_controls.py
 python -m pytest
 ```
 

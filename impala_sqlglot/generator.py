@@ -16,10 +16,12 @@ from impala_sqlglot.metadata import ImpalaMetadataGeneratorMixin
 from impala_sqlglot.ddl import ImpalaDDLGeneratorMixin
 from impala_sqlglot.compat_generation import ImpalaGenerationGeneratorMixin
 from impala_sqlglot.show import ImpalaShowGeneratorMixin
+from impala_sqlglot.maintenance import ImpalaMaintenanceGeneratorMixin
 
 
 class ImpalaGenerator(
-    ImpalaShowGeneratorMixin, ImpalaGenerationGeneratorMixin, ImpalaMetadataGeneratorMixin,
+    ImpalaShowGeneratorMixin, ImpalaMaintenanceGeneratorMixin,
+    ImpalaGenerationGeneratorMixin, ImpalaMetadataGeneratorMixin,
     ImpalaDDLGeneratorMixin, ImpalaSyntaxGeneratorMixin, HiveGenerator,
 ):
     """Impala SQL generator.
@@ -59,6 +61,7 @@ class ImpalaGenerator(
         **ImpalaDDLGeneratorMixin.DDL_TRANSFORMS,
         **ImpalaGenerationGeneratorMixin.GENERATION_TRANSFORMS,
         **ImpalaShowGeneratorMixin.SHOW_TRANSFORMS,
+        **ImpalaMaintenanceGeneratorMixin.MAINTENANCE_TRANSFORMS,
         **{
             k: v
             for k, v in HiveGenerator.TRANSFORMS.items()
@@ -68,6 +71,7 @@ class ImpalaGenerator(
                 exp.Create,
                 exp.ILike,      # Hive rewrites ILIKE → LIKE; Impala supports ILIKE
                 exp.Unnest,     # Hive rewrites UNNEST → EXPLODE; Impala uses UNNEST()
+                exp.NotNullColumnConstraint,  # Impala retains explicit NULL declarations
             )
         },
         exp.Create: preprocess([
