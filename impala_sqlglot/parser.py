@@ -9,10 +9,12 @@ from sqlglot.tokens import TokenType
 from impala_sqlglot.syntax import ImpalaSyntaxParserMixin
 from impala_sqlglot.metadata import ImpalaMetadataParserMixin
 from impala_sqlglot.ddl import ImpalaDDLParserMixin
+from impala_sqlglot.show import ImpalaShowParserMixin
 
 
 class ImpalaParser(
-    ImpalaMetadataParserMixin, ImpalaDDLParserMixin, ImpalaSyntaxParserMixin, Hive.Parser,
+    ImpalaShowParserMixin, ImpalaMetadataParserMixin, ImpalaDDLParserMixin,
+    ImpalaSyntaxParserMixin, Hive.Parser,
 ):
     """Impala SQL parser.
 
@@ -50,6 +52,7 @@ class ImpalaParser(
 
     STATEMENT_PARSERS = {
         **Hive.Parser.STATEMENT_PARSERS,
+        TokenType.SHOW: lambda self: self._parse_show(),
         TokenType.COLON: lambda self: self._parse_impala_admin_fn(),
     }
 

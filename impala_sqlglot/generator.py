@@ -10,15 +10,16 @@ from sqlglot.transforms import (
 from impala_sqlglot.syntax import (
     ImpalaSyntaxGeneratorMixin, Upsert, NonUniquePrimaryKey,
     NonUniquePrimaryKeyColumnConstraint, VariadicParameter, DropFunction,
-    ImpalaSubquery, PlanHintProperty,
+    ImpalaSubquery, PlanHintProperty, ImpalaPrimaryKey, ImpalaForeignKey,
 )
 from impala_sqlglot.metadata import ImpalaMetadataGeneratorMixin
 from impala_sqlglot.ddl import ImpalaDDLGeneratorMixin
 from impala_sqlglot.compat_generation import ImpalaGenerationGeneratorMixin
+from impala_sqlglot.show import ImpalaShowGeneratorMixin
 
 
 class ImpalaGenerator(
-    ImpalaGenerationGeneratorMixin, ImpalaMetadataGeneratorMixin,
+    ImpalaShowGeneratorMixin, ImpalaGenerationGeneratorMixin, ImpalaMetadataGeneratorMixin,
     ImpalaDDLGeneratorMixin, ImpalaSyntaxGeneratorMixin, HiveGenerator,
 ):
     """Impala SQL generator.
@@ -39,11 +40,14 @@ class ImpalaGenerator(
     PROPERTIES_LOCATION = {
         **HiveGenerator.PROPERTIES_LOCATION,
         **ImpalaDDLGeneratorMixin.DDL_PROPERTY_LOCATIONS,
+        ImpalaPrimaryKey: exp.Properties.Location.POST_SCHEMA,
         NonUniquePrimaryKey: exp.Properties.Location.POST_SCHEMA,
         PlanHintProperty: exp.Properties.Location.POST_CREATE,
     }
 
     TRANSFORMS = {
+        ImpalaPrimaryKey: lambda self, e: self.impalaprimarykey_sql(e),
+        ImpalaForeignKey: lambda self, e: self.impalaforeignkey_sql(e),
         Upsert: lambda self, e: self.upsert_sql(e),
         NonUniquePrimaryKey: lambda self, e: self.nonuniqueprimarykey_sql(e),
         NonUniquePrimaryKeyColumnConstraint: lambda self, e: self.nonuniqueprimarykeycolumnconstraint_sql(e),
@@ -54,6 +58,7 @@ class ImpalaGenerator(
         **ImpalaMetadataGeneratorMixin.METADATA_TRANSFORMS,
         **ImpalaDDLGeneratorMixin.DDL_TRANSFORMS,
         **ImpalaGenerationGeneratorMixin.GENERATION_TRANSFORMS,
+        **ImpalaShowGeneratorMixin.SHOW_TRANSFORMS,
         **{
             k: v
             for k, v in HiveGenerator.TRANSFORMS.items()
