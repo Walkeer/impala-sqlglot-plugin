@@ -30,3 +30,31 @@ def test_metadata_keyword_matching_excludes_every_string_token(token_type):
 def test_national_string_contents_are_not_native_metadata_keywords(source):
     with pytest.raises((ParseError, TokenError)):
         sqlglot.parse_one(source, read="impala")
+
+
+@pytest.mark.parametrize("key", [
+    "PRIMARY KEY (demo_key)",
+    "FOREIGN KEY (demo_key) REFERENCES demo_parent (demo_key)",
+])
+@pytest.mark.parametrize("flags", [
+    "N'DISABLE' NOVALIDATE RELY",
+    "DISABLE N'NOVALIDATE' RELY",
+    "DISABLE NOVALIDATE N'RELY'",
+    "N'ENABLE' VALIDATE NORELY",
+    "ENABLE N'VALIDATE' NORELY",
+    "ENABLE VALIDATE N'NORELY'",
+])
+def test_national_strings_do_not_become_table_key_flags(key, flags):
+    source = f"CREATE TABLE demo (demo_key BIGINT, {key} {flags}) STORED AS PARQUET"
+    with pytest.raises((ParseError, TokenError)):
+        sqlglot.parse_one(source, read="impala")
+
+
+@pytest.mark.parametrize("flags", ["N'NOT' ENFORCED", "NOT N'ENFORCED'"])
+def test_national_strings_do_not_become_not_enforced(flags):
+    source = (
+        f"CREATE TABLE demo (demo_key BIGINT, PRIMARY KEY (demo_key) {flags}) "
+        "STORED AS PARQUET"
+    )
+    with pytest.raises((ParseError, TokenError)):
+        sqlglot.parse_one(source, read="impala")
