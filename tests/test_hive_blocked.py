@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 import sqlglot
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 from sqlglot import exp
 
 
@@ -45,7 +45,7 @@ class TestNumericSuffixesBlocked:
                             f"{suffix_name} produced a typed CAST node — "
                             "Hive suffix behaviour leaked into Impala dialect"
                         )
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             pass  # error is also acceptable
 
 
@@ -68,7 +68,7 @@ class TestParameterSyntaxBlocked:
                         f"${{}}-style parameter was accepted as Hive Parameter — "
                         "should be blocked in Impala dialect"
                     )
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             pass  # error is acceptable
 
 
@@ -95,7 +95,7 @@ class TestHiveCommandsBlocked:
                             f"Hive command accepted as generic Command node: {sql!r} — "
                             "should be rejected"
                         )
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             pass  # error is correct behavior
 
 
@@ -114,7 +114,7 @@ class TestTransformBlocked:
                         "TRANSFORM ... USING parsed as QueryTransform — "
                         "Hive-only feature should be blocked in Impala dialect"
                     )
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             pass  # error is acceptable
 
 
@@ -137,5 +137,5 @@ class TestHiveTimeTravelBlocked:
                 f"Hive time-travel syntax was accepted — should be blocked once "
                 f"Impala time-travel override is implemented: {sql!r}"
             )
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             pass  # expected: Impala doesn't support this syntax

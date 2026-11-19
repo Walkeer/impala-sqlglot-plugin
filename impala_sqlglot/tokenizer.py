@@ -1,5 +1,6 @@
 """Impala Tokenizer — extends Hive, removes Hive-only tokens."""
 from __future__ import annotations
+import re
 
 from sqlglot import tokens
 from sqlglot.dialects.hive import Hive
@@ -26,20 +27,11 @@ _HIVE_ONLY_KEYWORDS: frozenset[str] = frozenset(
 
 # Additional multi-word keyword phrases to ADD for Impala
 _IMPALA_KEYWORDS: dict[str, TokenType] = {
-    # Impala time-travel (FOR SYSTEM_TIME AS OF / FOR SYSTEM_VERSION AS OF)
-    # These are parsed as multi-token sequences in the Parser layer; we map
-    # the leading phrase to a TIMESTAMP_SNAPSHOT / VERSION_SNAPSHOT token so
-    # the base _parse_version() method can be overridden cleanly.
-    "FOR SYSTEM_TIME AS OF": TokenType.TIMESTAMP_SNAPSHOT,
-    "FOR SYSTEM_VERSION AS OF": TokenType.VERSION_SNAPSHOT,
-    # UPSERT has the same grammar as INSERT in Impala
+    # Share dispatch, while the parser preserves the distinct UPSERT operation.
     "UPSERT": TokenType.INSERT,
-    # Kudu NON UNIQUE PRIMARY KEY is treated as PRIMARY KEY
+    # Share dispatch, while the parser preserves NON UNIQUE.
     "NON UNIQUE PRIMARY KEY": TokenType.PRIMARY_KEY,
     # Impala admin statements parsed as commands
-    "INVALIDATE METADATA": TokenType.COMMAND,
-    "COMPUTE STATS": TokenType.COMMAND,
-    "COMPUTE INCREMENTAL STATS": TokenType.COMMAND,
     "COPY TESTCASE": TokenType.COMMAND,
 }
 
@@ -64,7 +56,42 @@ class ImpalaTokenizer(Hive.Tokenizer):
     # No Hive numeric suffixes
     NUMERIC_LITERALS: dict[str, str] = {}
 
+    # Impala also allows comment hints after JOIN and after a write target.
+    # Keep hint tokens at other positions too, so the parser can reject them
+    # instead of silently degrading them into ordinary comments.
+    TOKENS_PRECEDING_HINT = set(TokenType)
+
     KEYWORDS = {
         **{k: v for k, v in Hive.Tokenizer.KEYWORDS.items() if k not in _HIVE_ONLY_KEYWORDS},
         **_IMPALA_KEYWORDS,
     }
+
+    def tokenize(self, sql, *args, **kwargs):
+        result = []
+        for token in super().tokenize(sql, *args, **kwargs):
+            if (
+                token.token_type == TokenType.HINT and token.comments
+                and any(character in token.comments[0] for character in ("\r", "\n"))
+                and result
+            ):
+                # The native scanner treats multiline block hints as comments.
+                result[-1].comments.extend(["+" + token.comments[0], *token.comments[1:]])
+                continue
+            hints = []
+            ordinary = []
+            for comment in token.comments:
+                match = re.match(r"^[ \t]*\+[ \t]*([^\r\n]*?)[ \t]*$", comment)
+                if match:
+                    hints.append(match.group(1))
+                else:
+                    ordinary.append(comment)
+            token.comments = ordinary
+            result.append(token)
+            for hint in hints:
+                result.append(
+                    tokens.Token(
+                        TokenType.HINT, "/*+" + hint + "*/", line=token.line,
+                        col=token.col, start=token.end, end=token.end, comments=[hint],
+                    )
+                )
+        return result

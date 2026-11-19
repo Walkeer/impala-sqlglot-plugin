@@ -86,8 +86,7 @@
     {
       "sql": "DROP FUNCTION IF EXISTS Foo(INT...)",
       "expect": "ok",
-      "dynamic": false,
-      "known_limitation": "Variadic function signature (INT...) not supported by sqlglot"
+      "dynamic": false
     },
     {
       "sql": "DROP FUNCTION Foo",

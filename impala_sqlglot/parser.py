@@ -6,9 +6,14 @@ import typing as t
 from sqlglot import exp
 from sqlglot.dialects.hive import Hive
 from sqlglot.tokens import TokenType
+from impala_sqlglot.syntax import ImpalaSyntaxParserMixin
+from impala_sqlglot.metadata import ImpalaMetadataParserMixin
+from impala_sqlglot.ddl import ImpalaDDLParserMixin
 
 
-class ImpalaParser(Hive.Parser):
+class ImpalaParser(
+    ImpalaMetadataParserMixin, ImpalaDDLParserMixin, ImpalaSyntaxParserMixin, Hive.Parser,
+):
     """Impala SQL parser.
 
     Phase 0 changes:
@@ -32,12 +37,60 @@ class ImpalaParser(Hive.Parser):
         **Hive.Parser.CONSTRAINT_PARSERS,
         "NON UNIQUE PRIMARY KEY": lambda self: self._parse_primary_key(),
     }
+    SCHEMA_UNNAMED_CONSTRAINTS = {
+        *Hive.Parser.SCHEMA_UNNAMED_CONSTRAINTS, "NON UNIQUE PRIMARY KEY",
+    }
+    PROPERTY_PARSERS = {
+        **Hive.Parser.PROPERTY_PARSERS,
+        "NON UNIQUE PRIMARY KEY": lambda self: self._parse_primary_key(in_props=True),
+    }
+    # TABLESAMPLE belongs to its table even when an alias precedes it.
+    TABLE_TERMINATORS = Hive.Parser.TABLE_TERMINATORS - {TokenType.TABLE_SAMPLE}
+    TABLE_POSTFIX_TOKENS = Hive.Parser.TABLE_POSTFIX_TOKENS | {TokenType.TABLE_SAMPLE}
 
     STATEMENT_PARSERS = {
         **Hive.Parser.STATEMENT_PARSERS,
         TokenType.COLON: lambda self: self._parse_impala_admin_fn(),
-        TokenType.REFRESH: lambda self: self._parse_impala_refresh(),
     }
+
+    OPERATION_MODIFIERS = {*Hive.Parser.OPERATION_MODIFIERS, "STRAIGHT_JOIN"}
+    QUERY_MODIFIER_PARSERS = {
+        token: parser for token, parser in Hive.Parser.QUERY_MODIFIER_PARSERS.items()
+        if token.name not in ("DISTRIBUTE_BY", "CLUSTER_BY", "SORT_BY")
+    }
+
+    def _parse_version(self) -> exp.Version | None:
+        if self._match_text_seq("FOR", "SYSTEM_TIME", "AS", "OF"):
+            kind = "TIMESTAMP"
+        elif self._match_text_seq("FOR", "SYSTEM_VERSION", "AS", "OF"):
+            kind = "VERSION"
+        else:
+            return super()._parse_version()
+
+        expression = self._parse_bitwise()
+        if expression is None:
+            self.raise_error("Expected time-travel value after AS OF")
+        if kind == "VERSION":
+            value = expression.this if isinstance(expression, exp.Neg) else expression
+            if not isinstance(value, exp.Literal) or value.is_string:
+                self.raise_error("SYSTEM_VERSION AS OF requires a numeric literal")
+
+        return self.expression(
+            exp.Version(this=kind, expression=expression, kind="AS OF")
+        )
+
+    def _parse_unary(self) -> exp.Expression | None:
+        this = super()._parse_unary()
+        # The tokenizer uses NOT for both prefix negation and postfix factorial.
+        while (
+            this is not None
+            and self._curr
+            and self._curr.token_type == TokenType.NOT
+            and self._curr.text == "!"
+        ):
+            self._advance()
+            this = self.expression(exp.Factorial(this=this))
+        return this
 
     def _parse_partition_and_order(
         self,
@@ -55,15 +108,6 @@ class ImpalaParser(Hive.Parser):
             self._advance()
         text = self._find_sql(start, self._prev)
         return exp.Command(this=text[:1], expression=text[1:])
-
-    def _parse_impala_refresh(self) -> exp.Refresh | exp.Command:
-        """Override REFRESH to handle PARTITION clause and FUNCTIONS (Impala-specific)."""
-        start = self._prev
-        while self._curr:
-            self._advance()
-        text = self._find_sql(start, self._prev)
-        return exp.Command(this="REFRESH", expression=text[len("REFRESH"):])
-
 
     def _parse_comment(self, allow_exists: bool = True) -> exp.Expression:
         """Override to support COMMENT ON ... IS NULL (clearing a comment)."""

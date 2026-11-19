@@ -22,6 +22,9 @@ from impala_sqlglot.generator import ImpalaGenerator
 class Impala(Hive):
     """SQLGlot dialect for Apache Impala."""
 
+    # Native syntax places the alias before TABLESAMPLE, unlike Hive.
+    ALIAS_POST_TABLESAMPLE = False
+
     # Impala identifiers are case-insensitive (same as Hive) but do NOT
     # start with $ like Hive parameters do, so we inherit the setting.
 

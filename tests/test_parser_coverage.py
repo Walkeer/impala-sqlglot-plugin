@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 import sqlglot
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 from conftest import ParserCase, case_id, load_fixtures
 
@@ -94,7 +94,9 @@ def _assert_case(case: ParserCase) -> None:
     if case.expect == "ok":
         try:
             result = sqlglot.parse(case.sql, read="impala", error_level=sqlglot.ErrorLevel.RAISE)
-            assert result, f"parse returned empty result for: {case.sql!r}"
+            assert result and any(tree is not None for tree in result), (
+                f"parse returned empty result for: {case.sql!r}"
+            )
         except (ParseError, Exception) as exc:
             pytest.fail(f"Expected parse success but got error for:\n  {case.sql!r}\n  {exc}")
     else:
@@ -103,7 +105,7 @@ def _assert_case(case: ParserCase) -> None:
         errored = False
         try:
             result = sqlglot.parse(case.sql, read="impala", error_level=sqlglot.ErrorLevel.RAISE)
-        except (ParseError, Exception):
+        except (ParseError, TokenError):
             errored = True
         if not errored:
             # sqlglot is lenient about some invalid SQL; mark as xfail rather than hard fail

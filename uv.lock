@@ -129,7 +129,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "sqlglot", specifier = ">=28.6.0" }]
+requires-dist = [{ name = "sqlglot", specifier = ">=30.10.0" }]
 
 [package.metadata.requires-dev]
 dev = [

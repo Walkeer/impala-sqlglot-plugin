@@ -24,6 +24,10 @@ print(result)
 
 ## Development
 
+See [Impala-specific syntax and analysis](docs/impala_syntax.md) for structured
+UPSERT, plan hints, statistics/metadata, Kudu partitioning, schema references
+and function signatures, including validation and compatibility limits.
+
 This project uses [uv](https://docs.astral.sh/uv/) and supports Python 3.11 and 3.12.
 
 ### Prerequisites
