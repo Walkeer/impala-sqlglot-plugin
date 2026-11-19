@@ -56,6 +56,9 @@ class ImpalaTokenizer(Hive.Tokenizer):
     # No Hive numeric suffixes
     NUMERIC_LITERALS: dict[str, str] = {}
 
+    # Give selected SHOW families structured parsing; other families fall back.
+    COMMANDS = Hive.Tokenizer.COMMANDS - {TokenType.SHOW}
+
     # Impala also allows comment hints after JOIN and after a write target.
     # Keep hint tokens at other positions too, so the parser can reject them
     # instead of silently degrading them into ordinary comments.

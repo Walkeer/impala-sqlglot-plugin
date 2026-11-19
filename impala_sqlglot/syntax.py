@@ -21,8 +21,22 @@ class Upsert(exp.Insert):
     """Kudu UPSERT: distinct from INSERT, with the same target/source fields."""
 
 
-class NonUniquePrimaryKey(exp.PrimaryKey):
-    arg_types = {**exp.PrimaryKey.arg_types, "unique": False}
+class ImpalaPrimaryKey(exp.PrimaryKey):
+    """Table key with independently declared, optional native modifiers."""
+
+    arg_types = {
+        **exp.PrimaryKey.arg_types, "enabled": False, "validated": False, "rely": False,
+    }
+
+
+class ImpalaForeignKey(exp.ForeignKey):
+    arg_types = {
+        **exp.ForeignKey.arg_types, "enabled": False, "validated": False, "rely": False,
+    }
+
+
+class NonUniquePrimaryKey(ImpalaPrimaryKey):
+    arg_types = {**ImpalaPrimaryKey.arg_types, "unique": False}
 
 
 class NonUniquePrimaryKeyColumnConstraint(exp.PrimaryKeyColumnConstraint):
@@ -51,6 +65,17 @@ class ImpalaSyntaxParserMixin:
     def _parse_create(self):
         hint = self._parse_hint()
         result = super()._parse_create()
+        if (
+            isinstance(result, exp.Create)
+            and result.kind == "TABLE"
+            and result.expression is not None
+            and any(
+                key.args.get(field) is not None
+                for key in result.find_all(exp.PrimaryKey, exp.ForeignKey)
+                for field in ("enabled", "validated", "rely")
+            )
+        ):
+            self.raise_error("Impala CREATE TABLE AS SELECT does not accept key modifiers")
         if hint is not None:
             if not isinstance(result, exp.Create) or result.kind != "TABLE" or result.expression is None:
                 self.raise_error("CREATE hints require CREATE TABLE AS SELECT")
@@ -251,10 +276,35 @@ class ImpalaSyntaxParserMixin:
             comments=[],
         )
 
+    def _parse_primary_key_part(self):
+        column = self._parse_metadata_identifier()
+        if column is None:
+            self.raise_error("Expected an Impala primary-key column identifier")
+        return column
+
     def _parse_primary_key(self, *args, **kwargs):
         non_unique = self._prev.text.upper() == "NON UNIQUE PRIMARY KEY"
-        constraint = super()._parse_primary_key(*args, **kwargs)
+        table_key = bool(
+            kwargs.get("in_props")
+            or self._curr and self._curr.token_type == TokenType.L_PAREN
+        )
+        previous = getattr(self, "_impala_key_options", None)
+        self._impala_key_options = "PRIMARY" if table_key else previous
+        try:
+            constraint = super()._parse_primary_key(*args, **kwargs)
+        finally:
+            self._impala_key_options = previous
+        if non_unique and "NOT ENFORCED" in (constraint.args.get("options") or []):
+            self.raise_error("NON UNIQUE and NOT ENFORCED are alternative primary-key forms")
+        modifiers, modifier_comments = (
+            self._parse_impala_key_modifiers() if table_key else ({}, [])
+        )
         if not non_unique:
+            if modifiers:
+                return self.expression(
+                    ImpalaPrimaryKey(**constraint.args, **modifiers),
+                    comments=[*(constraint.comments or []), *modifier_comments],
+                )
             return constraint
         cls = (
             NonUniquePrimaryKey
@@ -267,7 +317,91 @@ class ImpalaSyntaxParserMixin:
             # In a schema's standalone constraint slot a column list is required.
             if getattr(self, "_impala_standalone_key", False):
                 self.raise_error("Expected primary-key column list")
-        return self.expression(cls(**constraint.args, unique=False))
+        return self.expression(
+            cls(**constraint.args, **modifiers, unique=False),
+            comments=[*(constraint.comments or []), *modifier_comments],
+        )
+
+    def _parse_foreign_key(self):
+        previous = getattr(self, "_impala_metadata_comments", None)
+        self._impala_metadata_comments = list(self._prev_comments)
+        self._prev_comments = []
+        try:
+            columns = self._parse_impala_key_columns()
+            self._metadata_expect_word("REFERENCES")
+            table = self._parse_metadata_table()
+            referenced_columns = self._parse_impala_key_columns()
+            modifiers, modifier_comments = self._parse_impala_key_modifiers()
+            reference = exp.Reference(
+                this=exp.Schema(this=table, expressions=referenced_columns), options=[],
+            )
+            cls = ImpalaForeignKey if modifiers else exp.ForeignKey
+            return self.expression(
+                cls(expressions=columns, reference=reference, options=[], **modifiers),
+                comments=[*self._impala_metadata_comments, *modifier_comments],
+            )
+        finally:
+            self._impala_metadata_comments = previous
+
+    def _parse_impala_key_columns(self):
+        self._metadata_expect_token(TokenType.L_PAREN, "(")
+        columns = []
+        while True:
+            column = self._parse_metadata_identifier()
+            if column is None:
+                self.raise_error("Expected an Impala key column identifier")
+                break
+            columns.append(column)
+            if not self._metadata_match_token(TokenType.COMMA):
+                break
+        self._metadata_expect_token(TokenType.R_PAREN, ")")
+        return columns
+
+    def _parse_key_constraint_options(self):
+        kind = getattr(self, "_impala_key_options", None)
+        if kind is None:
+            return super()._parse_key_constraint_options()
+        # Native modifiers follow the key, in a fixed order. Do not let the
+        # base parser swallow RELY/NORELY as unordered generic options.
+        if (
+            kind == "PRIMARY"
+            and self._curr and self._next
+            and self._curr.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+            and self._next.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+            and self._curr.text.upper() == "NOT"
+            and self._next.text.upper() == "ENFORCED"
+        ):
+            comments = list(self._curr.comments)
+            self._advance(2)
+            self._prev_comments = [*comments, *self._prev_comments]
+            return ["NOT ENFORCED"]
+        return []
+
+    def _parse_impala_key_modifiers(self):
+        modifiers = {}
+        comments = []
+        groups = (
+            ("enabled", "ENABLE", "DISABLE"),
+            ("validated", "VALIDATE", "NOVALIDATE"),
+            ("rely", "RELY", "NORELY"),
+        )
+        for field, positive, negative in groups:
+            token = self._curr
+            if token and token.token_type not in (TokenType.IDENTIFIER, TokenType.STRING):
+                word = token.text.upper()
+                if word in (positive, negative):
+                    modifiers[field] = word == positive
+                    self._advance()
+                    comments.extend(self._prev_comments)
+                    self._prev_comments = []
+        token = self._curr
+        if (
+            token
+            and token.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+            and token.text.upper() in {word for _, yes, no in groups for word in (yes, no)}
+        ):
+            self.raise_error("Repeated or out-of-order Impala key modifier")
+        return modifiers, comments
 
     def _parse_unnamed_constraint(self, *args, **kwargs):
         previous = getattr(self, "_impala_standalone_key", False)
@@ -382,6 +516,12 @@ class ImpalaSyntaxGeneratorMixin:
     def create_sql(self, expression):
         if expression.find(exp.UniqueColumnConstraint) is not None:
             raise ValueError("Impala does not support UNIQUE constraints")
+        if expression.expression is not None and any(
+            key.args.get(field) is not None
+            for key in expression.find_all(exp.PrimaryKey, exp.ForeignKey)
+            for field in ("enabled", "validated", "rely")
+        ):
+            raise ValueError("Impala CREATE TABLE AS SELECT does not accept key modifiers")
         return super().create_sql(expression)
 
     def impalasubquery_sql(self, expression):
@@ -500,7 +640,57 @@ class ImpalaSyntaxGeneratorMixin:
         return self._impala_write_sql(expression, "UPSERT")
 
     def nonuniqueprimarykey_sql(self, expression):
-        return "NON UNIQUE " + super().primarykey_sql(expression)
+        return "NON UNIQUE " + self.impalaprimarykey_sql(expression)
+
+    def _impala_key_modifiers_sql(self, expression):
+        allowed = ["NOT ENFORCED"] if isinstance(expression, exp.PrimaryKey) else []
+        if any(option not in allowed for option in expression.args.get("options") or []):
+            raise ValueError("Use native Impala key modifier fields, not generic key options")
+        modifiers = []
+        for field, positive, negative in (
+            ("enabled", "ENABLE", "DISABLE"),
+            ("validated", "VALIDATE", "NOVALIDATE"),
+            ("rely", "RELY", "NORELY"),
+        ):
+            value = expression.args.get(field)
+            if value is not None:
+                if type(value) is not bool:
+                    raise ValueError(f"Impala key {field} must be a boolean or None")
+                modifiers.append(positive if value else negative)
+        return (" " + " ".join(modifiers)) if modifiers else ""
+
+    def impalaprimarykey_sql(self, expression):
+        if isinstance(expression, NonUniquePrimaryKey) and "NOT ENFORCED" in (
+            expression.args.get("options") or []
+        ):
+            raise ValueError("NON UNIQUE and NOT ENFORCED are alternative primary-key forms")
+        modifiers = self._impala_key_modifiers_sql(expression)
+        if not expression.expressions or not all(
+            isinstance(column, exp.Identifier) for column in expression.expressions
+        ):
+            raise ValueError("Impala primary keys require column identifiers")
+        for column in expression.expressions:
+            self._metadata_check_identifier(column)
+        return super().primarykey_sql(expression) + modifiers
+
+    def impalaforeignkey_sql(self, expression):
+        modifiers = self._impala_key_modifiers_sql(expression)
+        reference = expression.args.get("reference")
+        target = reference.this if isinstance(reference, exp.Reference) else None
+        if (
+            not expression.expressions
+            or not all(isinstance(column, exp.Identifier) for column in expression.expressions)
+            or not isinstance(target, exp.Schema)
+            or not target.expressions
+            or not all(isinstance(column, exp.Identifier) for column in target.expressions)
+            or expression.args.get("delete") or expression.args.get("update")
+            or reference.args.get("options")
+        ):
+            raise ValueError("Impala foreign keys require column lists and a complete reference")
+        self._metadata_table_sql(target.this)
+        for column in [*expression.expressions, *target.expressions]:
+            self._metadata_check_identifier(column)
+        return super().foreignkey_sql(expression) + modifiers
 
     def nonuniqueprimarykeycolumnconstraint_sql(self, expression):
         return "NON UNIQUE " + super().primarykeycolumnconstraint_sql(expression)

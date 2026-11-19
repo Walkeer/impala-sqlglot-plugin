@@ -12,6 +12,8 @@ and regenerates Impala SQL:
 | Time travel | `exp.Version`, generated as `FOR SYSTEM_TIME AS OF` or `FOR SYSTEM_VERSION AS OF` |
 | TABLESAMPLE | `exp.TableSample` with `method=SYSTEM`, `percent` and optional `seed`, generated with `REPEATABLE` |
 | Non-unique primary keys | `NonUniquePrimaryKey` or `NonUniquePrimaryKeyColumnConstraint`, with `unique=False` |
+| Table-key modifiers | `ImpalaPrimaryKey` / `ImpalaForeignKey`, with optional `enabled`, `validated` and `rely` boolean fields; non-unique table keys retain the same fields |
+| Catalog SHOW | `impala_sqlglot.show.ImpalaShow`, with `kind`, optional table target `this`, database identifier `db` and string literal `pattern` |
 | Statistics | `ImpalaComputeStats` / `ImpalaDropStats`, with a table target and applicable incremental, partition, column-list and sampling options |
 | Metadata | `ImpalaRefresh` / `ImpalaInvalidateMetadata`; refresh distinguishes tables, functions and authorization |
 | Kudu partitioning | `KuduPartitioningProperty`, ordered hash/range components, hash columns/counts, range endpoints and inclusivity |
@@ -43,6 +45,22 @@ assert tree.sql(dialect="impala").startswith("UPSERT /*+ SHUFFLE */ INTO")
 
 ## Validation boundaries
 
+- Table-level primary and foreign keys retain ENABLE/DISABLE,
+  VALIDATE/NOVALIDATE and RELY/NORELY in that order. Each omitted flag stays
+  absent (`None` when read with `args.get`), rather than becoming an explicit
+  declaration. Repeated and out-of-order flags are rejected. NOT ENFORCED
+  remains a separate option. These fields describe declarations, not proof
+  that the engine enforces uniqueness or referential integrity. Native
+  modifier combinations have not been qualified by live semantic analysis.
+  Modifiers are not accepted for CREATE TABLE AS SELECT. NON UNIQUE and
+  NOT ENFORCED are alternative spellings, not combinable declarations.
+  Key column lists require identifiers; foreign keys require complete
+  referenced table and column lists.
+- Structured SHOW covers TABLES (optional IN database and pattern),
+  DATABASES/SCHEMAS (optional pattern) and CREATE TABLE (table target).
+  Bare string patterns generate with LIKE; SCHEMAS generates as DATABASES.
+  Other SHOW families, including CREATE TABLE WITH STATS, remain opaque
+  Commands. Parsing does not query a catalog or fabricate returned objects.
 - Statistics/metadata paths require the documented targets and reject
   unsupported option combinations. Targetless `INVALIDATE METADATA` is valid.
   `COMPUTE STATS ... ()` preserves an explicitly empty column list.
@@ -76,6 +94,28 @@ assert tree.sql(dialect="impala").startswith("UPSERT /*+ SHUFFLE */ INTO")
 - Generic SQLGlot optimizers, other dialect generators and lineage consumers
   are not automatically aware of these extension classes. Consumers must
   retain their fields or explicitly reject unsupported transformations.
+  Use `tree.sql(dialect="impala")` for generation. Even a RELY-only table key
+  now uses an Impala extension node; `.sql()` without a dialect and Hive
+  generation do not support that node and raise rather than drop its fields.
+
+## Statistics consumer integration
+
+The `partition` field of `ImpalaComputeStats` and `ImpalaDropStats` is an
+`exp.Partition` node, or `None` when absent. Read the predicate list through
+`partition.expressions`, not by iterating the node as a provider-specific
+list. Incremental statistics predicates can contain comparisons, conjunctions
+and other expressions; they are not necessarily static key/value assignments.
+
+```python
+partition = tree.args.get("partition")
+predicates = [] if partition is None else partition.expressions
+predicate_sql = [item.sql(dialect="impala") for item in predicates]
+```
+
+Consumers that use a different provider must adapt its imports, node types
+and lowering logic separately. The plugin does not replace those adapters
+or treat a statistics operation as a row-data write. Ordinary COMPUTE STATS
+with PARTITION is not added by this integration contract.
 
 ## Reference and compatibility limits
 
