@@ -10,10 +10,12 @@ from impala_sqlglot.syntax import ImpalaSyntaxParserMixin
 from impala_sqlglot.metadata import ImpalaMetadataParserMixin
 from impala_sqlglot.ddl import ImpalaDDLParserMixin
 from impala_sqlglot.show import ImpalaShowParserMixin
+from impala_sqlglot.maintenance import ImpalaMaintenanceParserMixin
 
 
 class ImpalaParser(
-    ImpalaShowParserMixin, ImpalaMetadataParserMixin, ImpalaDDLParserMixin,
+    ImpalaShowParserMixin, ImpalaMaintenanceParserMixin,
+    ImpalaMetadataParserMixin, ImpalaDDLParserMixin,
     ImpalaSyntaxParserMixin, Hive.Parser,
 ):
     """Impala SQL parser.

@@ -366,8 +366,10 @@ class ImpalaSyntaxParserMixin:
         if (
             kind == "PRIMARY"
             and self._curr and self._next
-            and self._curr.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
-            and self._next.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+            and self._curr.token_type != TokenType.IDENTIFIER
+            and self._curr.token_type not in self.STRING_PARSERS
+            and self._next.token_type != TokenType.IDENTIFIER
+            and self._next.token_type not in self.STRING_PARSERS
             and self._curr.text.upper() == "NOT"
             and self._next.text.upper() == "ENFORCED"
         ):
@@ -387,7 +389,11 @@ class ImpalaSyntaxParserMixin:
         )
         for field, positive, negative in groups:
             token = self._curr
-            if token and token.token_type not in (TokenType.IDENTIFIER, TokenType.STRING):
+            if (
+                token
+                and token.token_type != TokenType.IDENTIFIER
+                and token.token_type not in self.STRING_PARSERS
+            ):
                 word = token.text.upper()
                 if word in (positive, negative):
                     modifiers[field] = word == positive
@@ -397,7 +403,8 @@ class ImpalaSyntaxParserMixin:
         token = self._curr
         if (
             token
-            and token.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+            and token.token_type != TokenType.IDENTIFIER
+            and token.token_type not in self.STRING_PARSERS
             and token.text.upper() in {word for _, yes, no in groups for word in (yes, no)}
         ):
             self.raise_error("Repeated or out-of-order Impala key modifier")

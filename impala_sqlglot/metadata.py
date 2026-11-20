@@ -77,10 +77,17 @@ def _trim_impala_identifier(text: str) -> str:
     return text.strip(_IMPALA_TRIM_CHARS)
 
 
+_METADATA_STRING_TOKENS = frozenset(
+    token_type for token_type in TokenType
+    if token_type.name == "STRING" or token_type.name.endswith("_STRING")
+)
+
+
 def _metadata_word(token, word: str) -> bool:
     return bool(
         token
-        and token.token_type not in (TokenType.IDENTIFIER, TokenType.STRING)
+        and token.token_type != TokenType.IDENTIFIER
+        and token.token_type not in _METADATA_STRING_TOKENS
         and token.text.upper() == word
     )
 
