@@ -10,7 +10,7 @@ from sqlglot.transforms import (
 from impala_sqlglot.syntax import (
     ImpalaSyntaxGeneratorMixin, Upsert, NonUniquePrimaryKey,
     NonUniquePrimaryKeyColumnConstraint, VariadicParameter, DropFunction,
-    ImpalaSubquery, PlanHintProperty, ImpalaPrimaryKey, ImpalaForeignKey,
+    ImpalaSubquery, ImpalaJoinBracketHint, PlanHintProperty, ImpalaPrimaryKey, ImpalaForeignKey,
 )
 from impala_sqlglot.metadata import ImpalaMetadataGeneratorMixin
 from impala_sqlglot.ddl import ImpalaDDLGeneratorMixin
@@ -56,6 +56,7 @@ class ImpalaGenerator(
         VariadicParameter: lambda self, e: self.variadicparameter_sql(e),
         DropFunction: lambda self, e: self.dropfunction_sql(e),
         ImpalaSubquery: lambda self, e: self.impalasubquery_sql(e),
+        ImpalaJoinBracketHint: lambda self, e: self.impalajoinbrackethint_sql(e),
         PlanHintProperty: lambda self, e: self.planhintproperty_sql(e),
         **ImpalaMetadataGeneratorMixin.METADATA_TRANSFORMS,
         **ImpalaDDLGeneratorMixin.DDL_TRANSFORMS,

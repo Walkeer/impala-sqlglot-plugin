@@ -10,7 +10,7 @@ from impala_sqlglot import Impala
 from impala_sqlglot.syntax import (
     DropFunction, NonUniquePrimaryKey, NonUniquePrimaryKeyColumnConstraint,
     Upsert, VariadicParameter,
-    ImpalaSubquery, PlanHintProperty,
+    ImpalaJoinBracketHint, ImpalaSubquery, PlanHintProperty,
 )
 
 
@@ -54,8 +54,82 @@ def test_join_hint_attachment(hint):
     assert join.this.alias == "b"
     assert isinstance(join.args["on"], exp.EQ)
     generated = roundtrip(tree)
-    assert "JOIN /*+" in generated
-    assert generated.index("JOIN") < generated.index("BROADCAST" if "BROADCAST" in hint else "SHUFFLE") < generated.index("demo_lookup")
+    name = "BROADCAST" if "BROADCAST" in hint else "SHUFFLE"
+    rendered_hint = f"[{name}]" if hint.startswith("[") else f"/*+ {name} */"
+    assert f"JOIN {rendered_hint} demo_lookup" in generated
+
+
+@pytest.mark.parametrize(("operator", "name"), [
+    ("JOIN", "sHuFfLe"),
+    ("LEFT OUTER JOIN", "BrOaDcAsT"),
+    ("INNER JOIN", "sHuFfLe"),
+    ("CROSS JOIN", "BrOaDcAsT"),
+])
+def test_join_bracket_hint_span_and_serialization(operator, name):
+    bracket = f"[ {name} ]"
+    condition = " ON a.demo_key = b.demo_key" if operator in ("INNER JOIN", "LEFT OUTER JOIN") else ""
+    sql = f"SELECT a.demo_key FROM demo_input a\n{operator} {bracket} demo_lookup b{condition}"
+    tree = parse(sql)
+    join = tree.args["joins"][0]
+    hint = join.args["hint"]
+    assert isinstance(hint, ImpalaJoinBracketHint)
+    assert hint.parent is join
+    assert hint.expressions[0].name == name.upper()
+    assert (hint.meta["line"], hint.meta["col"]) == (2, len(operator) + 2)
+    assert sql[hint.meta["start"]:hint.meta["end"] + 1] == bracket
+
+    loaded = exp.Expression.load(tree.dump())
+    assert loaded == tree
+    assert loaded.args["joins"][0].args["hint"].meta == hint.meta
+    assert f"{operator} [{name.upper()}] demo_lookup" in roundtrip(loaded)
+    assert f"{operator} [{name.upper()}] demo_lookup" in loaded.sql(dialect="impala", pretty=True)
+
+
+def test_bracket_hint_ownership_in_nested_and_consecutive_joins():
+    tree = parse(
+        "SELECT a.demo_key FROM demo_input a JOIN [broadcast] ("
+        "SELECT b.demo_key FROM demo_lookup b JOIN [shuffle] demo_inner c USING (demo_key)"
+        ") d USING (demo_key) JOIN [shuffle] demo_extra e USING (demo_key)"
+        " JOIN demo_final f USING (demo_key)"
+    )
+    outer, sibling, unhinted = tree.args["joins"]
+    nested = outer.this.this.args["joins"][0]
+    assert outer.args["hint"].expressions[0].name == "BROADCAST"
+    assert nested.args["hint"].expressions[0].name == "SHUFFLE"
+    assert sibling.args["hint"].expressions[0].name == "SHUFFLE"
+    assert unhinted.args.get("hint") is None
+    assert not outer.this.args.get("hints")
+    assert not tree.args.get("hint")
+    assert not outer.this.this.args.get("hint")
+    assert {id(hint.parent) for hint in tree.find_all(exp.Hint)} == {
+        id(outer), id(nested), id(sibling),
+    }
+    roundtrip(tree)
+
+
+@pytest.mark.parametrize("bracket", [
+    "[UNKNOWN]", "[NOSHUFFLE]", "['BROADCAST']", "[`BROADCAST`]",
+    "[SHUFFLE, BROADCAST]", "[SHUFFLE",
+])
+def test_invalid_join_bracket_hint_rejected(bracket):
+    with pytest.raises(ParseError):
+        parse(f"SELECT a.demo_key FROM demo_input a JOIN {bracket} demo_lookup b USING (demo_key)")
+
+
+@pytest.mark.parametrize("comment", ["/* [BROADCAST] */", "-- [SHUFFLE]\n", "[/* BROADCAST */]"])
+def test_bracket_hint_text_in_comments_and_strings_is_not_a_join_hint(comment):
+    tree = parse(f"SELECT '[SHUFFLE]' FROM demo_input JOIN {comment} demo_lookup ON TRUE")
+    assert tree.expressions[0].this == "[SHUFFLE]"
+    assert tree.args["joins"][0].args.get("hint") is None
+    roundtrip(tree)
+
+
+@pytest.mark.parametrize("dialect", ["hive", "spark", "postgres"])
+def test_bracket_join_hint_is_not_exported_to_other_dialects(dialect):
+    tree = parse("SELECT a.demo_key FROM demo_input a JOIN [SHUFFLE] demo_lookup b USING (demo_key)")
+    clean = tree.copy()
+    clean.args["joins"][0].set("hint", None)
+    assert tree.sql(dialect=dialect) == clean.sql(dialect=dialect)
 
 
 @pytest.mark.parametrize("operation", ["INSERT", "UPSERT"])
