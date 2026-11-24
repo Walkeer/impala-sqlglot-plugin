@@ -57,6 +57,10 @@ class ImpalaSubquery(exp.Subquery):
     arg_types = {**exp.Subquery.arg_types, "hints": False}
 
 
+class ImpalaJoinBracketHint(exp.Hint):
+    """A legacy distribution hint written in brackets after JOIN."""
+
+
 class PlanHintProperty(exp.Property):
     arg_types = {"this": True}
 
@@ -183,9 +187,35 @@ class ImpalaSyntaxParserMixin:
                 item.set("this", item.name.upper())
         return hint
 
+    def _parse_join_hint(self):
+        opening = self._curr
+        name = self._next
+        if opening.token_type != TokenType.L_BRACKET or name.token_type == TokenType.R_BRACKET:
+            # Keep comment hints and the existing empty-hint no-op.
+            return self._parse_hint()
+
+        # Do not consume a bracket sequence that is not a distribution hint.
+        closing_index = self._index + 2
+        if (
+            name.token_type != TokenType.VAR
+            or name.text.upper() not in ("BROADCAST", "SHUFFLE")
+            or closing_index >= self._tokens_size
+            or self._tokens[closing_index].token_type != TokenType.R_BRACKET
+        ):
+            return None
+
+        self._advance()  # [
+        item = self._parse_var(upper=True)
+        self._advance()  # ]
+        hint = self.expression(ImpalaJoinBracketHint(expressions=[item]), token=opening)
+        hint.meta["end"] = self._prev.end
+        return hint
+
     def _parse_table(self, *args, **kwargs):
         hint = None
-        if self._prev and self._prev.token_type in (TokenType.JOIN, TokenType.STRAIGHT_JOIN):
+        if self._prev.token_type == TokenType.JOIN:
+            hint = self._parse_join_hint()
+        elif self._prev.token_type == TokenType.STRAIGHT_JOIN:
             hint = self._parse_hint()
         table = super()._parse_table(*args, **kwargs)
         if isinstance(table, exp.Subquery) and self._curr and self._curr.token_type == TokenType.TABLE_SAMPLE:
@@ -585,6 +615,9 @@ class ImpalaSyntaxGeneratorMixin:
         if expression.args.get("seed") is not None:
             sql += f" REPEATABLE({self.sql(expression, 'seed')})"
         return " " + sql
+
+    def impalajoinbrackethint_sql(self, expression):
+        return f"[{self.expressions(expression, flat=True)}]"
 
     def join_sql(self, expression):
         hint = expression.args.get("hint")

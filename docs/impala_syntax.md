@@ -6,7 +6,7 @@ and regenerates Impala SQL:
 | Construct | Expression / fields |
 | --- | --- |
 | UPSERT | `impala_sqlglot.syntax.Upsert`, a distinct subclass of `exp.Insert`, with target, source, columns and hint |
-| Plan hints | `exp.Hint` on a SELECT, write, JOIN, table or inline view; `PlanHintProperty` for CREATE TABLE AS SELECT; bracket, block-comment and line-comment inputs generate comment hints |
+| Plan hints | `exp.Hint` on a SELECT, write, JOIN, table or inline view; `PlanHintProperty` for CREATE TABLE AS SELECT. Inputs generate comment hints except for bracketed JOIN distribution hints, which retain brackets in Impala SQL. |
 | Hinted inline views | `ImpalaSubquery`, a subclass of `exp.Subquery` with `hints` |
 | SELECT STRAIGHT_JOIN | `Select.operation_modifiers`; comment-form STRAIGHT_JOIN remains a hint |
 | Time travel | `exp.Version`, generated as `FOR SYSTEM_TIME AS OF` or `FOR SYSTEM_VERSION AS OF` |
@@ -92,6 +92,10 @@ assert tree.sql(dialect="impala").startswith("UPSERT /*+ SHUFFLE */ INTO")
   hints merely because a later line begins with `+`.
   Multiline block comments are not active plan hints, including those whose
   first line begins with `+`.
+- Directly after `JOIN`, a single unquoted `BROADCAST` or `SHUFFLE` in
+  brackets is stored as `ImpalaJoinBracketHint` (an `exp.Hint`) on the join's
+  `hint` argument. Its source span includes both brackets. Impala output uses
+  uppercase inside the brackets; the hint is not translated to other dialects.
 - `SYSTEM_VERSION` accepts numeric literals, not column references or
   arithmetic expressions. Acceptance by the parser does not establish that
   a snapshot exists.
